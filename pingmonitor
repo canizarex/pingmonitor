@@ -1,0 +1,203 @@
+#!/bin/bash
+
+# Set the conf file with the token and the chat id
+conf_file="/etc/pingmonitor.conf"
+
+# Set the number of failures tolerated before sending a message.
+tolerance=1
+
+# Set a timer (s) to wait between iterations.
+timer=30
+
+# Set the api URL
+api_url="https://api.telegram.org/bot"
+
+# Declare an associative array to count the errrors of each target.
+declare -A err_counter
+
+# Declare a couple of associative arrays to save the time of each target.
+declare -A time_down
+declare -A time_up
+
+# Declare a couple of arrays to enqueue the notifications.
+declare -a q_down
+declare -a q_up
+
+# Get the current time in a specific format.
+function get_time() {
+  date '+%F %T'
+}
+
+# Log info messages.
+function log() {
+  logger -p daemon.info -t "$(basename "$0")" "$@"
+}
+
+# Log error messages.
+function log_error() {
+  logger -p daemon.error -t "$(basename "$0")" "$@"
+}
+
+# Read the config file.
+function read_config() {
+  if ! [[ -r "${conf_file}" ]]; then
+    log_error "The config file couldn't be read"
+    exit 1
+  fi
+  log "Config file read"
+  source "${conf_file}"
+
+  # Append the token to the api_url
+  api_url+="${token}"
+}
+
+# Test the bot token with the method "getMe".
+function test_token() {
+  local api_method="${api_url}/getMe"
+  
+  # -m1: set the max-time to 1 second.
+  if ! curl -sf -m1 -X POST "${api_method}"; then
+    log_error "The token couldn't be verified or is incorrect"
+    exit 1
+  fi
+  log "Token verified"
+}
+
+# Send a message with the method "sendMessage".
+function send() {
+  local api_method="${api_url}/sendMessage"
+
+  # -m1: set the max-time to 1 second.
+  if ! curl -sf -m1 -X POST "${api_method}" -d chat_id="${chat_id}" -d text="$1"; then
+    log_error "There was a problem connecting to the Telegram API"
+    return 1
+  fi
+}
+
+# Prepare the messages and pass them to send()
+function notify() {
+
+  local msg
+  local target="$1"
+  local status="$2"
+  
+  if [[ "$status" == "down" ]]; then
+    msg="TARGET DOWN: $target Last seen on ${time_down[$target]}"
+  elif [[ "$status" == "up" ]]; then
+    msg="TARGET UP: $target Connection recovered on ${time_up[$target]}"
+  fi
+  
+  if ! send "${msg}"; then
+    log_error "Couldn't notify on event: $target $status"
+    return 1
+  fi
+  log "Notification sent on event: $target $status"
+}
+
+# Empty the queues as the notifications are sent.
+function manage_q() {
+  
+  local queue
+  local status="$1"
+
+  # Fill the local array with the values of the down/up arrays
+  # depending on the argument of the function.
+  if [[ "${status}" == "down" ]]; then
+    queue=("${q_down[@]}")
+  elif [[ "${status}" == "up" ]]; then
+    queue=("${q_up[@]}")
+  fi
+
+  for i in "${!queue[@]}"; do 
+    
+    # If the notification has been sent, remove the target from the queue.
+    if ! notify "${queue[$i]}" "${status}"; then
+      continue
+    fi
+    unset queue["$i"]
+  done
+  
+  # Re-build the global queues again.
+  if [[ "$1" == "down" ]]; then
+    q_down=("${queue[@]}")
+  elif [[ "$1" == "up" ]]; then
+    q_up=("${queue[@]}")
+  fi
+
+}
+
+# Take the necessary actions when a target is down.
+function handle_error() {
+
+  local target="$1"
+
+  log_error "Ping to ${target}: FAILED"
+  err_counter["${target}"]=$(( "${err_counter["$target"]}" + 1 ))
+    
+  # If it is the first time it fails just save the time.
+  if [[ err_counter["${target}"] -eq 1 ]]; then
+    time_down["${target}"]=$(get_time)
+  fi
+
+  # If the counter is greater than the tolerance add the target to a queue.
+  if (( err_counter["${target}"] == tolerance + 1 )); then
+    q_down+=( "${target}" )
+  fi
+}
+
+# Take the necessary actions when a target is back up.
+function handle_recovery() {
+
+  local target="$1"
+
+  log "Ping to ${target}: OK"
+
+  # If it failed previously more times than tolerated
+  # get the time and add the target to a queue.
+  if [[ err_counter["${target}"] -gt "${tolerance}" ]]; then
+    time_up["${target}"]=$(get_time)
+    q_up+=("${target}")
+  fi
+
+  # In any case reset the fail counter.
+  err_counter["${target}"]=0
+}
+
+# Ping a list of targets and take the appropriate
+# action depending on the result.
+function ping_monitor() {
+  for target in "$@"; do
+
+    # -c3: send 3 packets.
+    # -w3: wait for 3 seconds max.
+    if ! ping -c3 -w3 "${target}" &>/dev/null; then
+      handle_error "${target}"  
+    else
+      handle_recovery "${target}"
+    fi
+  done
+}
+
+# Main function
+function main() {
+
+  log "··· Starting $(basename "$0") ···" 
+  read_config
+  test_token
+
+  while true; do
+    ping_monitor "$@"
+    
+    if [[ "${#q_down[@]}" -gt 0 ]]; then
+      manage_q "down" 
+    fi
+
+    if [[ "${#q_up[@]}" -gt 0 ]]; then
+      manage_q "up" 
+    fi
+    
+    sleep "${timer}"
+  done
+}
+
+main "$@"
