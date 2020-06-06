@@ -3,14 +3,14 @@
 # Set the conf file with the token and the chat id
 conf_file="/etc/pingmonitor.conf"
 
+# Set the api URL
+api_url="https://api.telegram.org/bot"
+
 # Set the number of failures tolerated before sending a message.
 tolerance=1
 
 # Set a timer (s) to wait between iterations.
 timer=30
-
-# Set the api URL
-api_url="https://api.telegram.org/bot"
 
 # Declare an associative array to count the errrors of each target.
 declare -A err_counter
@@ -46,15 +46,12 @@ function read_config() {
   fi
   log "Config file read"
   source "${conf_file}"
-
-  # Append the token to the api_url.
-  api_url+="${token}"
 }
 
-# Test the bot token with the method "getMe".
+# Test the bot token with the API method "getMe".
 function test_token() {
   local api_method="${api_url}/getMe"
-  
+
   # -m1: set the max-time to 1 second.
   if ! curl -sf -m1 -X POST "${api_method}"; then
     log_error "The token couldn't be verified or is incorrect"
@@ -63,7 +60,7 @@ function test_token() {
   log "Token verified"
 }
 
-# Send a message with the method "sendMessage".
+# Send a message with the API method "sendMessage".
 function send() {
   local api_method="${api_url}/sendMessage"
 
@@ -80,13 +77,13 @@ function notify() {
   local msg
   local target="$1"
   local status="$2"
-  
+
   if [[ "${status}" == "down" ]]; then
     msg="TARGET DOWN: ${target} Last seen on ${time_down[$target]}"
   elif [[ "${status}" == "up" ]]; then
     msg="TARGET UP: ${target} Connection recovered on ${time_up[$target]}"
   fi
-  
+
   if ! send "${msg}"; then
     log_error "Couldn't notify on event: ${target} ${status}"
     return 1
@@ -96,8 +93,9 @@ function notify() {
 
 # Empty the queues as the notifications are sent.
 function manage_q() {
-  
+
   local queue
+  local target
   local status="$1"
 
   # Fill the local array with the values of the down/up arrays
@@ -108,22 +106,21 @@ function manage_q() {
     queue=("${q_up[@]}")
   fi
 
-  for i in "${!queue[@]}"; do 
-    
+  for target in "${!queue[@]}"; do
+
     # If the notification has been sent, remove the target from the queue.
-    if ! notify "${queue[$i]}" "${status}"; then
+    if ! notify "${queue[$target]}" "${status}"; then
       continue
     fi
-    unset queue["$i"]
+    unset queue["${target}"]
   done
-  
+
   # Re-build the global queues again.
-  if [[ "$1" == "down" ]]; then
+  if [[ "${status}" == "down" ]]; then
     q_down=("${queue[@]}")
-  elif [[ "$1" == "up" ]]; then
+  elif [[ "${status}" == "up" ]]; then
     q_up=("${queue[@]}")
   fi
-
 }
 
 # Take the necessary actions when a target is down.
@@ -132,16 +129,16 @@ function handle_error() {
   local target="$1"
 
   log_error "Ping to ${target}: FAILED"
-  err_counter["${target}"]=$(( "${err_counter["$target"]}" + 1 ))
-    
+  err_counter["${target}"]=$(("${err_counter["$target"]}" + 1))
+
   # If it is the first time it fails just save the time.
   if [[ err_counter["${target}"] -eq 1 ]]; then
     time_down["${target}"]=$(get_time)
   fi
 
   # If the counter is greater than the tolerance add the target to a queue.
-  if (( err_counter["${target}"] == tolerance + 1 )); then
-    q_down+=( "${target}" )
+  if ((err_counter["${target}"] == tolerance + 1)); then
+    q_down+=("${target}")
   fi
 }
 
@@ -166,12 +163,15 @@ function handle_recovery() {
 # Ping a list of targets and take the appropriate
 # action depending on the result.
 function ping_monitor() {
+  
+  local target
+  
   for target in "$@"; do
 
     # -c3: send 3 packets.
     # -w3: wait for 3 seconds max.
     if ! ping -c3 -w3 "${target}" &>/dev/null; then
-      handle_error "${target}"  
+      handle_error "${target}"
     else
       handle_recovery "${target}"
     fi
@@ -181,21 +181,23 @@ function ping_monitor() {
 # Main function
 function main() {
 
-  log "··· Starting $(basename "$0") ···" 
+  log "··· Starting $(basename "$0") ···"
+ 
   read_config
+  api_url+="${token}"
   test_token
-
+  
   while true; do
     ping_monitor "$@"
-    
+
     if [[ "${#q_down[@]}" -gt 0 ]]; then
-      manage_q "down" 
+      manage_q "down"
     fi
 
     if [[ "${#q_up[@]}" -gt 0 ]]; then
-      manage_q "up" 
+      manage_q "up"
     fi
-    
+
     sleep "${timer}"
   done
 }
