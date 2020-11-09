@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# Set the conf file with the token and the chat id
+# Set the conf file with the token and the chat id.
 conf_file="/etc/pingmonitor.conf"
 
-# Set the api URL
+# Set the api URL.
 api_url="https://api.telegram.org/bot"
 
-# Set the number of failures tolerated before sending a message.
+# Set the number of failures that are tolerated before sending a message.
 tolerance=1
 
 # Set a timer (s) to wait between iterations.
@@ -52,8 +52,8 @@ function read_config() {
 function test_token() {
   local api_method="${api_url}/getMe"
 
-  # -m1: set the max-time to 1 second.
-  if ! curl -sf -m1 -X POST "${api_method}"; then
+  # -m5: set max-time to 5 seconds.
+  if ! curl -sf -m5 -X POST "${api_method}"; then
     log_error "The token couldn't be verified or is incorrect"
     exit 1
   fi
@@ -65,6 +65,8 @@ function send() {
   local api_method="${api_url}/sendMessage"
 
   # -m1: set the max-time to 1 second.
+  # This function may be called even when there is no connection with the api
+  # endpoint so it has to fail quickly.
   if ! curl -sf -m1 -X POST "${api_method}" -d chat_id="${chat_id}" -d text="$1"; then
     log_error "There was a problem connecting to the Telegram API"
     return 1
@@ -73,7 +75,6 @@ function send() {
 
 # Prepare the messages and pass them to send()
 function notify() {
-
   local msg
   local target="$1"
   local status="$2"
@@ -93,7 +94,6 @@ function notify() {
 
 # Empty the queues as the notifications are sent.
 function manage_q() {
-
   local queue
   local target
   local status="$1"
@@ -125,7 +125,6 @@ function manage_q() {
 
 # Take the necessary actions when a target is down.
 function handle_error() {
-
   local target="$1"
 
   log_error "Ping to ${target}: FAILED"
@@ -144,7 +143,6 @@ function handle_error() {
 
 # Take the necessary actions when a target is up.
 function handle_recovery() {
-
   local target="$1"
 
   log "Ping to ${target}: OK"
@@ -163,7 +161,6 @@ function handle_recovery() {
 # Ping a list of targets and take the appropriate
 # action depending on the result.
 function ping_monitor() {
-  
   local target
   
   for target in "$@"; do
@@ -180,7 +177,6 @@ function ping_monitor() {
 
 # Main function
 function main() {
-
   log "··· Starting $(basename "$0") ···"
  
   read_config
