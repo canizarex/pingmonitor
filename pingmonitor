@@ -80,9 +80,9 @@ function notify() {
   local status="$2"
 
   if [[ "${status}" == "down" ]]; then
-    msg="TARGET DOWN: ${target} Last seen on ${time_down[$target]}"
+    msg="TARGET DOWN: ${target}%0ALast seen on ${time_down[$target]}"
   elif [[ "${status}" == "up" ]]; then
-    msg="TARGET UP: ${target} Connection recovered on ${time_up[$target]}"
+    msg="TARGET UP: ${target}%0ARecovered on ${time_up[$target]}"
   fi
 
   if ! send "${msg}"; then
